@@ -12,7 +12,6 @@ from telegram.ext import (
 # ----------------------------------------------------
 BOT_TOKEN = "8606133927:AAHOVaafAKx17KpYnt6GsJlptRGA63Srhsk"
 
-# Student Roster categorized for automated banter
 BOYS = [
     "Abhinandan",
     "Aritra",
@@ -41,29 +40,28 @@ GIRLS = [
     "Sukanya Mondal",
 ]
 
-# Attendance Tracking State
+# Tracking State: maps student_name -> telegram_user_id
 attendance_records = {}
 
 
 # ----------------------------------------------------
-# 2. START COMMAND WITH CUSTOM FUNNY OPENING
+# 2. ATTENDANCE COMMAND
 # ----------------------------------------------------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def attendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global attendance_records
-    attendance_records = {}  # Reset attendance for a new session
+    attendance_records = {}  # Reset session
 
     opening_text = (
         "🔥 *কইরে henglu পেঙ্গলু er দল!!* 🔥\n\n"
         "সবাই নিজের অ্যাটেনডেন্স জানিয়ে দাও !! 🚀✨\n\n"
-        "_Click your name button below to mark your presence:_"
+        "_Click YOUR own name button below to mark your presence:_"
     )
 
     all_students = sorted(BOYS + GIRLS)
     keyboard = []
 
-    # Creating interactive buttons with 2 columns to keep it clean
     row = []
-    for idx, name in enumerate(all_students, start=1):
+    for name in all_students:
         row.append(
             InlineKeyboardButton(
                 f"⚡ {name} 🎯", callback_data=f"mark_{name}"
@@ -76,7 +74,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if row:
         keyboard.append(row)
 
-    # Add Finish button at the bottom
     keyboard.append(
         [
             InlineKeyboardButton(
@@ -92,35 +89,51 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ----------------------------------------------------
-# 3. INTERACTIVE BUTTON HANDLER
+# 3. INTERACTIVE BUTTON HANDLER (LOCKED TO USER ID)
 # ----------------------------------------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
+    user_id = query.from_user.id
 
-    # Marking individual presence with popup alerts
     if data.startswith("mark_"):
         student_name = data.split("_")[1]
 
+        # Check 1: Has anyone already claimed this name?
         if student_name in attendance_records:
+            if attendance_records[student_name] == user_id:
+                await query.answer(
+                    text=f"⚠️ {student_name}, তুমি তো ইতিমধ্যেই Present দিয়ে ফেলেছো! 😅",
+                    show_alert=True,
+                )
+            else:
+                await query.answer(
+                    text=f"❌ {student_name}-এর অ্যাটেনডেন্স অন্য কেউ দিয়ে দিয়েছে! তুমি শুধু তোমার নিজের নামের বাটন চাপতে পারবে।",
+                    show_alert=True,
+                )
+            return
+
+        # Check 2: Has this Telegram user already claimed a DIFFERENT name?
+        if user_id in attendance_records.values():
             await query.answer(
-                text=f"⚠️ {student_name}, তুমি তো ইতিমধ্যেই Present দিয়ে ফেলেছো! 😅",
+                text="⚠️ তুমি তো ইতিমধ্যেই অন্য নামে Present দিয়ে দিয়েছো! একজন একবারই অ্যাটেনডেন্স দিতে পারবে। 😅",
                 show_alert=True,
             )
-        else:
-            attendance_records[student_name] = "Present"
-            await query.answer(
-                text=f"🎉 Boom! {student_name} is Present! 🟢", show_alert=False
-            )
+            return
 
-    # Finishing attendance and calculating stats
+        # Success: Lock the name to this Telegram user ID
+        attendance_records[student_name] = user_id
+        await query.answer(
+            text=f"🎉 Boom! {student_name} is Present! 🟢", show_alert=False
+        )
+
     elif data == "finish_attendance":
         await query.answer()
         await generate_final_report(query)
 
 
 # ----------------------------------------------------
-# 4. REPORT & BANTER GENERATION
+# 4. REPORT GENERATION
 # ----------------------------------------------------
 async def generate_final_report(query):
     all_students = BOYS + GIRLS
@@ -146,7 +159,6 @@ async def generate_final_report(query):
 
     report_text += "`" + "-" * 32 + "`\n"
 
-    # Gender comparison banter
     if present_girls > present_boys:
         report_text += "💃 *পেঙ্গলু গুলো আজকে বেশি আছে!* 💥\n"
     elif present_boys > present_girls:
@@ -155,8 +167,6 @@ async def generate_final_report(query):
         report_text += "⚖️ *আজকে হেঙ্গলু আর পেঙ্গলু একদম সমান সমান!* 🤝\n"
 
     report_text += "`" + "=" * 32 + "`\n\n"
-
-    # Friendly closing greeting
     report_text += (
         "✨ *ধন্যবাদ সবাইকে! সবাই ভালোভাবে পড়াশোনা করো এবং সুস্থ থেকো!* 🙏❤️"
     )
@@ -170,9 +180,9 @@ async def generate_final_report(query):
 if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
+    # Changed command to /attendance
+    app.add_handler(CommandHandler("attendance", attendance))
     app.add_handler(CallbackQueryHandler(button_handler))
 
     print("Attendance Bot Started...")
     app.run_polling()
-    
