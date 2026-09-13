@@ -1,102 +1,178 @@
-import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+import os
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+)
 
-# Updated roster with actual names
-ROSTER = {
-    "01": "KOEL (MAY 02)",
-    "02": "AURA (JAN 09)",
-    "03": "HAIDER (JUL 15)",
-    "04": "SAEED (AUG 27)",
-    "05": "PRITHWI (JUL 22)",
-    "06": "SUBHANKAR (OCT 09)"
-}
+# ----------------------------------------------------
+# 1. BOT CONFIGURATION & CATEGORIZED ROSTER
+# ----------------------------------------------------
+BOT_TOKEN = "8606133927:AAHOVaafAKx17KpYnt6GsJlptRGA63Srhsk"
 
-active_session = {
-    "active": False,
-    "present": set(),
-    "message_id": None,
-    "chat_id": None
-}
+# Student Roster categorized for automated banter
+BOYS = [
+    "Abhinandan",
+    "Aritra",
+    "Classy",
+    "Gnetlemxn",
+    "Haider",
+    "Ramit",
+    "Ranbir",
+    "Saeed",
+    "Sayan",
+    "Sushanta Basak",
+    "Swarna",
+]
 
-def build_keyboard():
+GIRLS = [
+    "Amina",
+    "Anurima",
+    "Atreyi",
+    "Bidisha",
+    "Koel",
+    "Nasima",
+    "Reshmi",
+    "Saraiya",
+    "Shreyoshree",
+    "Sneha",
+    "Sukanya Mondal",
+]
+
+# Attendance Tracking State
+attendance_records = {}
+
+
+# ----------------------------------------------------
+# 2. START COMMAND WITH CUSTOM FUNNY OPENING
+# ----------------------------------------------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global attendance_records
+    attendance_records = {}  # Reset attendance for a new session
+
+    opening_text = (
+        "🔥 *কইরে henglu পেঙ্গলু er দল!!* 🔥\n\n"
+        "সবাই নিজের অ্যাটেনডেন্স জানিয়ে দাও !! 🚀✨\n\n"
+        "_Click your name button below to mark your presence:_"
+    )
+
+    all_students = sorted(BOYS + GIRLS)
     keyboard = []
+
+    # Creating interactive buttons with 2 columns to keep it clean
     row = []
-    for roll, name in ROSTER.items():
-        is_present = roll in active_session["present"]
-        status = "✅" if is_present else "❌"
-        text = f"{status} {roll}. {name}"
-        row.append(InlineKeyboardButton(text, callback_data=f"mark_{roll}"))
-        
-        if len(row) == 2:  # Displays 2 students per row
+    for idx, name in enumerate(all_students, start=1):
+        row.append(
+            InlineKeyboardButton(
+                f"⚡ {name} 🎯", callback_data=f"mark_{name}"
+            )
+        )
+        if len(row) == 2:
             keyboard.append(row)
             row = []
+
     if row:
         keyboard.append(row)
-        
-    keyboard.append([InlineKeyboardButton("🏁 End Attendance", callback_data="end_session")])
-    return InlineKeyboardMarkup(keyboard)
 
-async def start_attendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global active_session
-    active_session = {
-        "active": True,
-        "present": set(),
-        "chat_id": update.effective_chat.id
-    }
-    
-    msg = await update.message.reply_text(
-        "📋 **Attendance Session Started**\n\nTap your roll/name to mark present:",
-        reply_markup=build_keyboard(),
-        parse_mode="Markdown"
+    # Add Finish button at the bottom
+    keyboard.append(
+        [
+            InlineKeyboardButton(
+                "🏁 Finish & Show Report 📊", callback_data="finish_attendance"
+            )
+        ]
     )
-    active_session["message_id"] = msg.message_id
 
-async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        opening_text, reply_markup=reply_markup, parse_mode="Markdown"
+    )
+
+
+# ----------------------------------------------------
+# 3. INTERACTIVE BUTTON HANDLER
+# ----------------------------------------------------
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-
-    if not active_session["active"]:
-        await query.answer("This session has ended.", show_alert=True)
-        return
-
     data = query.data
+
+    # Marking individual presence with popup alerts
     if data.startswith("mark_"):
-        roll = data.split("_")[1]
-        
-        if roll in active_session["present"]:
-            active_session["present"].remove(roll)
-            await query.answer(f"Roll {roll} marked absent.")
+        student_name = data.split("_")[1]
+
+        if student_name in attendance_records:
+            await query.answer(
+                text=f"⚠️ {student_name}, তুমি তো ইতিমধ্যেই Present দিয়ে ফেলেছো! 😅",
+                show_alert=True,
+            )
         else:
-            active_session["present"].add(roll)
-            await query.answer(f"Roll {roll} marked present!")
+            attendance_records[student_name] = "Present"
+            await query.answer(
+                text=f"🎉 Boom! {student_name} is Present! 🟢", show_alert=False
+            )
 
-        await query.edit_message_reply_markup(reply_markup=build_keyboard())
+    # Finishing attendance and calculating stats
+    elif data == "finish_attendance":
+        await query.answer()
+        await generate_final_report(query)
 
-    elif data == "end_session":
-        active_session["active"] = False
-        
-        present_list = sorted(list(active_session["present"]))
-        absent_list = sorted([r for r in ROSTER.keys() if r not in active_session["present"]])
 
-        present_str = "\n".join([f"• Roll {r}: {ROSTER[r]}" for r in present_list]) or "None"
-        absent_str = "\n".join([f"• Roll {r}: {ROSTER[r]}" for r in absent_list]) or "None"
+# ----------------------------------------------------
+# 4. REPORT & BANTER GENERATION
+# ----------------------------------------------------
+async def generate_final_report(query):
+    all_students = BOYS + GIRLS
+    presents = list(attendance_records.keys())
+    absents = [s for s in all_students if s not in presents]
 
-        summary = (
-            "📊 **FINAL ATTENDANCE REPORT**\n"
-            "━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"✅ **PRESENT ({len(present_list)}):**\n{present_str}\n\n"
-            f"❌ **ABSENT ({len(absent_list)}):**\n{absent_str}\n"
-        )
-        await query.edit_message_text(summary, parse_mode="Markdown")
+    present_boys = sum(1 for s in presents if s in BOYS)
+    present_girls = sum(1 for s in presents if s in GIRLS)
 
-def main():
-    token = "8606133927:AAEjxIemS0IFquD55YNeYkFWximqjL-u1UU"
-    app = Application.builder().token(token).build()
-    app.add_handler(CommandHandler("attendance", start_attendance))
-    app.add_handler(CallbackQueryHandler(handle_button))
-    
-    print("Bot is running... Press Ctrl+C in Pydroid to stop.")
-    app.run_polling()
+    report_text = "📊 *ATTENDANCE SUMMARY REPORT* 📊\n"
+    report_text += "`" + "=" * 32 + "`\n\n"
 
+    report_text += (
+        f"🟢 *Present ({len(presents)}):*\n"
+        + (", ".join(sorted(presents)) if presents else "None ❌")
+        + "\n\n"
+    )
+    report_text += (
+        f"🔴 *Absent ({len(absents)}):*\n"
+        + (", ".join(sorted(absents)) if absents else "None 🎉")
+        + "\n\n"
+    )
+
+    report_text += "`" + "-" * 32 + "`\n"
+
+    # Gender comparison banter
+    if present_girls > present_boys:
+        report_text += "💃 *পেঙ্গলু গুলো আজকে বেশি আছে!* 💥\n"
+    elif present_boys > present_girls:
+        report_text += "🕺 *হেঙ্গলু গুলো আজকে বেশি আছে!* 💥\n"
+    else:
+        report_text += "⚖️ *আজকে হেঙ্গলু আর পেঙ্গলু একদম সমান সমান!* 🤝\n"
+
+    report_text += "`" + "=" * 32 + "`\n\n"
+
+    # Friendly closing greeting
+    report_text += (
+        "✨ *ধন্যবাদ সবাইকে! সবাই ভালোভাবে পড়াশোনা করো এবং সুস্থ থেকো!* 🙏❤️"
+    )
+
+    await query.edit_message_text(text=report_text, parse_mode="Markdown")
+
+
+# ----------------------------------------------------
+# MAIN ENGINE
+# ----------------------------------------------------
 if __name__ == "__main__":
-    main()
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(button_handler))
+
+    print("Attendance Bot Started...")
+    app.run_polling()
+    
